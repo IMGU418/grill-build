@@ -1,0 +1,40 @@
+# grill이 만든 빌드 워크플로: ComfyUI 워크플로 앱의 커스텀 노드 이미지를 빌드해 이 계정의 GitHub 패키지에 올린다.
+# grill(https://github.com/IMGU418/grill)이 앱을 올릴 때 실행한다. 이 파일은 grill이 관리한다 (고치면 다음 빌드 때 되돌린다).
+name: grill build
+run-name: grill build ${{ inputs.app }} ${{ inputs.request }}
+on:
+  workflow_dispatch:
+    inputs:
+      app:
+        description: app id (apps/<app>)
+        required: true
+      request:
+        description: grill request id
+        required: true
+permissions:
+  contents: read
+  packages: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL && docker system prune -af > /dev/null
+      - name: Build and push
+        env:
+          APP: ${{ inputs.app }}
+          REQUEST: ${{ inputs.request }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          [[ "$APP" =~ ^[a-z0-9][a-z0-9-]{0,63}$ && "$REQUEST" =~ ^[a-z0-9]{8,32}$ ]] || { echo "bad input"; exit 1; }
+          owner=$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
+          image="ghcr.io/$owner/grill-build:$APP-$REQUEST"
+          echo "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker build --progress plain --pull --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" -t "$image" "apps/$APP"
+          docker push "$image" | tee push.log
+          digest=$(grep -oE 'digest: sha256:[0-9a-f]{64}' push.log | tail -1 | cut -d' ' -f2)
+          [ -n "$digest" ] || { echo "no digest"; exit 1; }
+          echo "GRILL-IMAGE ghcr.io/$owner/grill-build@$digest"
